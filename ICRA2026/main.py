@@ -119,6 +119,14 @@ def get_tracks_list_data(bag_path):
     return df
 
 
+def get_manager_path_data(bag_path):
+    """Extract manager path data from bag"""
+    bag = bagpy.bagreader(bag_path)
+    csv_file = bag.message_by_topic("/manager/path")
+    df = pd.read_csv(csv_file)
+    return df
+
+
 def parse_tracks_string(tracks_str):
     """Parse the tracks string to extract track positions and footprints"""
     tracks = []
@@ -427,3 +435,4 @@ def generate_all_plots(bag_path):
 
 if __name__ == "__main__":
     generate_all_plots("data/exp2_aug_simon_2025-06-06-09-26-37.bag")
+    
