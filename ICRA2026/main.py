@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import sys
 import os
+import re
 import math
 from matplotlib.patches import Polygon
 
@@ -110,8 +111,55 @@ def get_dock_pose_data(bag_path):
 
 
 
-def plot_vessel_trajectory(pose_df, reference_df=None, dock_df=None):
-    """Plot vessel trajectory with vessel shapes at key positions"""
+def get_tracks_list_data(bag_path):
+    """Extract tracks list data from bag"""
+    bag = bagpy.bagreader(bag_path)
+    csv_file = bag.message_by_topic("/tracks_list")
+    df = pd.read_csv(csv_file)
+    return df
+
+
+def parse_tracks_string(tracks_str):
+    """Parse the tracks string to extract track positions"""
+    tracks = []
+    if pd.isna(tracks_str) or tracks_str == '[]':
+        return tracks
+    
+    # Split by track entries (each starts with "id:")
+    track_entries = re.split(r'(?=id:)', str(tracks_str))
+    
+    for entry in track_entries:
+        if 'id:' not in entry:
+            continue
+            
+        # Extract ID
+        id_match = re.search(r'id:\s*([\d.]+)', entry)
+        if not id_match:
+            continue
+        track_id = float(id_match.group(1))
+        
+        # Extract position x, y
+        x_match = re.search(r'x:\s*([-\d.]+)', entry)
+        y_match = re.search(r'y:\s*([-\d.]+)', entry)
+        
+        if x_match and y_match:
+            x = float(x_match.group(1))
+            y = float(y_match.group(1))
+            tracks.append({'id': track_id, 'x': x, 'y': y})
+    
+    return tracks
+
+
+def get_dockable_area_data(bag_path):
+    """Extract dockable area data from bag"""
+    bag = bagpy.bagreader(bag_path)
+    csv_file = bag.message_by_topic("/manager/dockable_area")
+    df = pd.read_csv(csv_file)
+    return df
+
+
+def plot_vessel_trajectory(pose_df, reference_df=None, dock_df=None, tracks_df=None, dockable_area_df=None, show_tracks=False):  # Added show_tracks flag
+    """Plot vessel trajectory with vessel shapes at key positions, tracks, and dockable area"""
     fig, ax = plt.subplots(figsize=(12, 10))
     
     # NED frame: X = North (vertical), Y = East (horizontal)
@@ -140,9 +188,65 @@ def plot_vessel_trajectory(pose_df, reference_df=None, dock_df=None):
                 ref_y_col = col
         
         if ref_x_col and ref_y_col:
-            # Plot with Y (East) on horizontal axis, X (North) on vertical axis
             ax.plot(reference_df[ref_y_col], reference_df[ref_x_col], 'g--', 
                    linewidth=2, alpha=0.8, label='Reference Path')
+    
+    # Plot dockable area (if available)
+    if dockable_area_df is not None and not dockable_area_df.empty:
+        print("Plotting dockable area...")
+        
+        # Look for polygon points columns
+        point_cols = [col for col in dockable_area_df.columns if 'points' in col]
+        x_cols = [col for col in point_cols if col.endswith('.x')]
+        y_cols = [col for col in point_cols if col.endswith('.y')]
+        
+        for i, row in dockable_area_df.iterrows():
+            polygon_x = []
+            polygon_y = []
+            
+            # Extract all polygon points
+            for x_col, y_col in zip(x_cols, y_cols):
+                if pd.notna(row[x_col]) and pd.notna(row[y_col]):
+                    # Flip coordinates: x is East, y is North
+                    polygon_x.append(row[x_col])  # East (horizontal)
+                    polygon_y.append(row[y_col])  # North (vertical)
+            
+            if polygon_x and polygon_y:
+                # Close the polygon by adding first point at the end
+                polygon_x.append(polygon_x[0])
+                polygon_y.append(polygon_y[0])
+                
+                ax.plot(polygon_x, polygon_y, 'c-', linewidth=2, alpha=0.8, label='Dockable Area' if i == 0 else None)
+                ax.fill(polygon_x, polygon_y, color='cyan', alpha=0.2)
+    
+    # Plot tracks (if available and enabled) - TRACKS CODE PRESERVED
+    if show_tracks and tracks_df is not None and not tracks_df.empty:
+        print(f"Processing {len(tracks_df)} track messages...")
+        plotted_tracks = False
+        
+        for i, row in tracks_df.iterrows():
+            tracks = parse_tracks_string(row['tracks'])
+            
+            for track in tracks:
+                # Swap coordinates: track['x'] is East, track['y'] is North
+                track_east = track['x']   # East (horizontal axis)
+                track_north = track['y']  # North (vertical axis)
+                
+                label = 'Tracks' if not plotted_tracks else None
+                if label:
+                    plotted_tracks = True
+                
+                # Plot as (East, North) to match our coordinate system
+                ax.scatter(track_east, track_north, c='orange', s=30, alpha=0.6, 
+                         marker='o', label=label)
+                
+                # Optionally add track ID labels (only for some tracks to avoid clutter)
+                if i % 50 == 0:  # Only label every 50th message
+                    ax.annotate(f'{int(track["id"])}', (track_east, track_north), 
+                              xytext=(3, 3), textcoords='offset points', 
+                              fontsize=8, alpha=0.7)
+        
+        print(f"Plotted tracks: {plotted_tracks}")
     
     # Plot trajectory line (Y on horizontal axis, X on vertical axis)
     ax.plot(y_pos, x_pos, 'b-', linewidth=1, alpha=0.5, label='Trajectory')
@@ -186,7 +290,7 @@ def plot_vessel_trajectory(pose_df, reference_df=None, dock_df=None):
             ax.add_patch(Polygon(vessel_dock, facecolor='purple', edgecolor='purple', alpha=0.8, label='Dock Pose'))
     
     ax.set_xlabel('East (m) →')  # Y axis, increasing right
-    ax.set_ylabel('North (m) →')  # X axis, increasing up
+    ax.set_ylabel('North (m) ↑')  # X axis, increasing up
     ax.set_title('Vessel Trajectory with Orientation (NED Frame)')
     ax.legend()
     ax.grid(True, alpha=0.3)
@@ -194,6 +298,22 @@ def plot_vessel_trajectory(pose_df, reference_df=None, dock_df=None):
     
     plt.savefig('vessel_trajectory.png', dpi=300, bbox_inches='tight')
     return fig
+
+
+
+
+def debug_tracks_data(bag_path):
+    """Debug what's in the tracks list topic"""
+    bag = bagpy.bagreader(bag_path)
+    csv_file = bag.message_by_topic("/tracks_list")
+    df = pd.read_csv(csv_file)
+    
+    print(f"Tracks list has {len(df)} messages")
+    print("Columns:", df.columns.tolist())
+    print("\nFirst few rows:")
+    print(df.head())
+    
+    return df
 
 
 
@@ -205,14 +325,21 @@ def generate_all_plots(bag_path):
     pose_data = get_pose_data(bag_path)
     reference_data = get_reference_pose_data(bag_path)
     dock_data = get_dock_pose_data(bag_path)
+    tracks_data = None #get_tracks_list_data(bag_path)
+    dockable_area_data = get_dockable_area_data(bag_path)
+    
+    # DEBUG: Check tracks data
+    print("=== TRACKS DEBUG ===")
+    debug_tracks_data(bag_path)
+    print("==================")
     
     print("Generating plots...")
     plot_manager_state(manager_data)
-    plot_vessel_trajectory(pose_data, reference_data, dock_data)
+    plot_vessel_trajectory(pose_data, reference_data, dock_data, tracks_data, dockable_area_data, show_tracks=False)
+    
     
     print("All plots saved!")
     plt.show()
-
 
 
 if __name__ == "__main__":
