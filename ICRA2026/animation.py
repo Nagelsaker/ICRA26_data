@@ -210,9 +210,9 @@ def animate_docking_experiment(bag_path):
     fig = plt.figure(figsize=(12, 14))  # Taller figure for subplots
     fig.patch.set_facecolor('#0a0a0a')
     
-    # Create subplot layout: map on top, thrusters below
-    ax_map = plt.subplot2grid((3, 1), (0, 0), rowspan=2)  # Map takes 2/3 of height
-    ax_thrusters = plt.subplot2grid((3, 1), (2, 0))       # Thrusters take 1/3 of height
+    # Create subplot layout: map on top, vessel diagram below
+    ax_map = plt.subplot2grid((4, 1), (0, 0), rowspan=3)  # Map takes 3/4 of height
+    ax_vessel = plt.subplot2grid((4, 1), (3, 0))          # Vessel diagram takes 1/4 of height
     
     # Set up map subplot
     ax_map.set_facecolor('#1a1a1a')
@@ -230,24 +230,29 @@ def animate_docking_experiment(bag_path):
     ax_map.grid(True, alpha=0.3, color='#404040', linestyle='-', linewidth=0.5)
     ax_map.tick_params(colors='white', labelsize=12)
     
-    # Set up thruster subplot
-    ax_thrusters.set_facecolor('#1a1a1a')
-    ax_thrusters.set_xlabel('Thruster RPM', fontsize=12, color='white', fontweight='bold')
-    ax_thrusters.set_ylabel('Thrusters', fontsize=12, color='white', fontweight='bold')
-    ax_thrusters.set_xlim(0, 1000)  # Changed to 0-1000
-    ax_thrusters.set_ylim(-0.5, 3.5)
-    ax_thrusters.grid(True, alpha=0.3, color='#404040', linestyle='-', linewidth=0.5)
-    ax_thrusters.tick_params(colors='white', labelsize=10)
+    # Set up vessel diagram subplot
+    ax_vessel.set_facecolor('#1a1a1a')
+    ax_vessel.set_title('Thruster Configuration', fontsize=12, color='white', fontweight='bold')
+    ax_vessel.set_xlim(-4, 4)
+    ax_vessel.set_ylim(-3, 3)
+    ax_vessel.axis('equal')
+    ax_vessel.axis('off')  # Remove axes
+
+    # Draw vessel using existing function (nose pointing right: heading = 0)
+    vessel_shape = create_vessel_shape(0, 0, np.pi/2)  # Center at origin, nose right
+    vessel_patch_static = Polygon(vessel_shape, facecolor='#4a90e2', 
+                                edgecolor='#37474f', alpha=0.6, linewidth=2)
+    ax_vessel.add_patch(vessel_patch_static)
+
+    # Initialize thruster arrows at correct positions (ship pointing right)
+    thruster_positions = [
+        [2.0, 1.0],   # T1: Bow port (front-left)
+        [2.0, -1.0],  # T2: Bow starboard (front-right)
+        [-2.0, -1.0], # T3: Stern port (back-right as you specified)
+        [-2.0, 1.0]   # T4: Stern starboard (back-left as you specified)
+    ]
     
-    # Add zero line for thrusters
-    ax_thrusters.axvline(x=0, color='white', linewidth=2, alpha=0.8)
-    
-    # Set thruster labels
-    thruster_labels = ['Thruster 1', 'Thruster 2', 'Thruster 3', 'Thruster 4']
-    ax_thrusters.set_yticks(range(4))
-    ax_thrusters.set_yticklabels(thruster_labels)
-    
-    # Draw static floating dock contour
+    # Draw static floating dock contour on map
     # Nyhavna floating dock contour (original coordinates)
     CONTOUR1 = [[7035581.26, 7035521.52, 7035521.81, 7035581.6, 7035581.26], 
                [570828.72, 570822.49, 570818.11, 570824.44, 570828.72]]
@@ -263,7 +268,7 @@ def animate_docking_experiment(bag_path):
     ax_map.plot(contour_east, contour_north, '#4a90e2', linewidth=3, alpha=0.9, label='Nyhavna Dock')
     ax_map.fill(contour_east, contour_north, color='#37474f', alpha=0.6)
     
-    # Initialize animation elements
+    # Initialize animation elements for map
     vessel_patch = None
     trajectory_line = None
     path_plots = []
@@ -274,24 +279,26 @@ def animate_docking_experiment(bag_path):
     drawn_dockable_areas = set()
     track_plots = []
     current_tracks_index = -1
-    
-    # Initialize thruster bars
-    thruster_bars = []
-    thruster_angles = []  # Store angle indicators
-    thruster_colors = ['#00ff88', '#0088ff', '#ff6b35', '#ffa726']
-    for i in range(4):
-        bar = ax_thrusters.barh(i, 0, height=0.3, color=thruster_colors[i], alpha=0.8)  # Reduced height from 0.6 to 0.3
-        thruster_bars.append(bar)
+
+
+    thruster_arrows = []
+    thruster_color = '#00ff88'
+    for i, pos in enumerate(thruster_positions):
+        # Create much larger, more visible arrows
+        arrow = ax_vessel.annotate('', xy=(pos[0]+0.8, pos[1]), xytext=(pos[0], pos[1]),
+                                arrowprops=dict(arrowstyle='->', color=thruster_color, 
+                                                lw=8, alpha=0.9, shrinkA=0, shrinkB=0,
+                                                mutation_scale=25))
+        thruster_arrows.append(arrow)
         
-        # Initialize angle indicators (small circles with arrows)
-        angle_circle = plt.Circle((950, i), 15, fill=False, color=thruster_colors[i], linewidth=2)
-        ax_thrusters.add_patch(angle_circle)
-        
-        # Arrow for angle direction (initially pointing right)
-        angle_arrow = ax_thrusters.annotate('', xy=(965, i), xytext=(935, i),
-                                        arrowprops=dict(arrowstyle='->', color=thruster_colors[i], lw=2))
-        
-        thruster_angles.append({'circle': angle_circle, 'arrow': angle_arrow})
+        # Add thruster label (positioned clearly outside the vessel)
+        if pos[0] > 0:  # Front thrusters
+            label_x = pos[0] + 1.2
+        else:  # Stern thrusters  
+            label_x = pos[0] - 1.2
+            
+        ax_vessel.text(label_x, pos[1], f'T{i+1}', ha='center', va='center', 
+                    color=thruster_color, fontsize=12, fontweight='bold')
     
     time_text = ax_map.text(0.02, 0.98, '', transform=ax_map.transAxes, 
                            fontsize=14, color='#00ff88', fontweight='bold',
@@ -320,13 +327,13 @@ def animate_docking_experiment(bag_path):
         # Update tracks (replace old with new)
         track_plots, current_tracks_index = update_tracks(ax_map, tracks_by_time, current_time, track_plots, current_tracks_index)
         
-        # Update thrusters
-        update_thrusters(ax_thrusters, thruster_data, thruster_bars, thruster_angles, current_time)
+        # Update vessel thruster diagram
+        update_vessel_thrusters(ax_vessel, thruster_data, thruster_arrows, thruster_positions, current_time)
         
         # Update time display
         time_text.set_text(f'Time: {current_time:.1f}s')
         
-        return_list = [vessel_patch, time_text] + ([trajectory_line] if trajectory_line else []) + path_plots + dockable_area_plots + track_plots + [bar[0] for bar in thruster_bars] + [angle['arrow'] for angle in thruster_angles]
+        return_list = [vessel_patch, time_text] + ([trajectory_line] if trajectory_line else []) + path_plots + dockable_area_plots + track_plots + [arrow for arrow in thruster_arrows]
         if dock_pose_patch:
             return_list.append(dock_pose_patch)
         
@@ -495,9 +502,16 @@ def update_tracks(ax, tracks_by_time, current_time, track_plots, current_tracks_
 
 
 
-def update_thrusters(ax_thrusters, thruster_data, thruster_bars, thruster_angles, current_time):
-    """Update thruster bar plots and angle indicators with current RPM and angle values"""
+def update_vessel_thrusters(ax_vessel, thruster_data, thruster_arrows, thruster_positions, current_time):
+    """Update thruster arrows on vessel diagram with current RPM and angle values"""
     
+    # Remove all existing arrows
+    for arrow in thruster_arrows:
+        arrow.remove()
+    thruster_arrows.clear()
+    
+    angle_offsets = [90, -90, 90, -90]
+    # Recreate arrows with current data
     for i in range(4):
         thruster_key = f'thruster_{i+1}'
         if thruster_data[thruster_key] is not None:
@@ -509,34 +523,68 @@ def update_thrusters(ax_thrusters, thruster_data, thruster_bars, thruster_angles
                 latest_throttle = valid_data['throttle_reference'].iloc[-1]
                 latest_angle = valid_data['angle_reference'].iloc[-1]
                 
-                # Update bar width (ensure positive values only)
-                bar_width = max(0, abs(latest_throttle))  # Take absolute value and ensure >= 0
-                thruster_bars[i][0].set_width(bar_width)
+                # Calculate arrow length based on throttle magnitude
+                max_arrow_length = 2.0
+                min_arrow_length = 0.3
+                arrow_length = min_arrow_length + (abs(latest_throttle) / 1000.0) * (max_arrow_length - min_arrow_length)
                 
-                # Color coding based on original sign
-                if latest_throttle >= 0:
-                    thruster_bars[i][0].set_color('#00ff88')
+                # Determine arrow direction and color based on throttle sign
+                if latest_throttle < 0:
+                    angle_rad = np.deg2rad(latest_angle + angle_offsets[i] + 180)  # Reverse direction
+                    color = '#ff4444'  # Red for reverse thrust
                 else:
-                    thruster_bars[i][0].set_color('#ff4444')  # Red for negative (reverse)
+                    angle_rad = np.deg2rad(latest_angle + angle_offsets[i])
+                    color = '#00ff88'  # Green for forward thrust
                 
-                # Update angle indicator
-                # Convert angle to radians and create arrow direction
-                angle_rad = np.deg2rad(latest_angle)
-                center_x, center_y = 950, i
-                arrow_length = 12
+                # Calculate arrow end point relative to thruster position
+                pos = thruster_positions[i]
+                end_x = pos[0] + arrow_length * np.cos(angle_rad)
+                end_y = pos[1] + arrow_length * np.sin(angle_rad)
                 
-                # Calculate arrow end point
-                end_x = center_x + arrow_length * np.cos(angle_rad)
-                end_y = center_y + arrow_length * np.sin(angle_rad)
-                start_x = center_x - arrow_length * np.cos(angle_rad)
-                start_y = center_y - arrow_length * np.sin(angle_rad)
-                
-                # Update arrow position
-                thruster_angles[i]['arrow'].set_position((end_x, end_y))
-                thruster_angles[i]['arrow'].xy = (end_x, end_y)
-                thruster_angles[i]['arrow'].xytext = (start_x, start_y)
+                # Create new arrow
+                arrow = ax_vessel.annotate('', xy=(end_x, end_y), xytext=(pos[0], pos[1]),
+                                          arrowprops=dict(arrowstyle='->', color=color, 
+                                                        lw=8, alpha=0.9, shrinkA=0, shrinkB=0,
+                                                        mutation_scale=25))
+                thruster_arrows.append(arrow)
+            else:
+                # No data yet, create minimal default arrow
+                pos = thruster_positions[i]
+                arrow = ax_vessel.annotate('', xy=(pos[0]+0.3, pos[1]), xytext=(pos[0], pos[1]),
+                                          arrowprops=dict(arrowstyle='->', color='#00ff88', 
+                                                        lw=8, alpha=0.3, shrinkA=0, shrinkB=0,
+                                                        mutation_scale=25))
+                thruster_arrows.append(arrow)
 
-
+def debug_thruster_data(bag_path):
+    """Debug function to check actual thruster RPM ranges in the bag file"""
+    print("=== THRUSTER DATA DEBUG ===")
+    
+    for i in range(1, 5):
+        topic = f"/actuator_ref_{i}"
+        try:
+            bag = bagpy.bagreader(bag_path)
+            csv_file = bag.message_by_topic(topic)
+            df = pd.read_csv(csv_file)
+            
+            # Check RPM values
+            rpm_values = df['throttle_reference']
+            angle_values = df['angle_reference']
+            
+            print(f"\nThruster {i} ({topic}):")
+            print(f"  Total messages: {len(df)}")
+            print(f"  RPM range: {rpm_values.min()} to {rpm_values.max()}")
+            print(f"  Angle range: {angle_values.min()}° to {angle_values.max()}°")
+            print(f"  Negative RPM count: {(rpm_values < 0).sum()}")
+            print(f"  Zero RPM count: {(rpm_values == 0).sum()}")
+            print(f"  Sample RPM values: {rpm_values.head(10).tolist()}")
+            
+        except Exception as e:
+            print(f"Error loading {topic}: {e}")
+    
+    print("\n=== END DEBUG ===")
 
 if __name__ == "__main__":
-    animate_docking_experiment("data/exp2_aug_simon_2025-06-06-09-26-37.bag")
+    bag_file = "data/exp2_aug_simon_2025-06-06-09-26-37.bag"
+    animate_docking_experiment(bag_file)
+    # debug_thruster_data(bag_file)
