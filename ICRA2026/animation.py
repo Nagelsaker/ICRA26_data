@@ -155,7 +155,7 @@ def extract_thruster_data(bag_path, start_time):
 
 
 
-def animate_docking_experiment(bag_path):
+def animate_docking_experiment(bag_path, save_video=False):
     """Create real-time animated visualization of the docking experiment"""
     
     print("Extracting pose data for animation...")
@@ -207,18 +207,28 @@ def animate_docking_experiment(bag_path):
     
     # Set up the figure with dark theme and subplots
     plt.style.use('dark_background')
-    fig = plt.figure(figsize=(12, 14))  # Taller figure for subplots
+    fig = plt.figure(figsize=(16, 9), dpi=120)
     fig.patch.set_facecolor('#0a0a0a')
-    
-    # Create subplot layout: map on top, vessel diagram below
-    ax_map = plt.subplot2grid((4, 1), (0, 0), rowspan=3)  # Map takes 3/4 of height
-    ax_vessel = plt.subplot2grid((4, 1), (3, 0))          # Vessel diagram takes 1/4 of height
+
+    # Create subplot layout: video left (16:9), map right (smaller), bottom plots  
+    ax_video = plt.subplot2grid((4, 10), (0, 0), rowspan=3, colspan=7)     # Video: 3 rows, 7 cols (more width)
+    ax_map = plt.subplot2grid((4, 10), (0, 7), rowspan=3, colspan=3)       # Map: 3 rows, 3 cols (smaller)
+    ax_vessel = plt.subplot2grid((4, 10), (3, 0), colspan=4)               # Vessel: row 3
+    ax_manager = plt.subplot2grid((4, 10), (3, 4), colspan=6)              # Manager: row 3
+
+    # Set up video placeholder
+    ax_video.set_facecolor('#000000')
+    # ax_video.set_title('Experiment Video Feed', fontsize=14, color='white', fontweight='bold')
+    ax_video.text(0.5, 0.5, 'Video Feed\n(16:9)', ha='center', va='center', 
+                transform=ax_video.transAxes, fontsize=16, color='#666666', fontweight='bold')
+    ax_video.set_xticks([])
+    ax_video.set_yticks([])
     
     # Set up map subplot
     ax_map.set_facecolor('#1a1a1a')
     ax_map.set_xlabel('East (m) →', fontsize=14, color='white', fontweight='bold')
-    ax_map.set_ylabel('North (m) ↑', fontsize=14, color='white', fontweight='bold')
-    ax_map.set_title('Autonomous Docking Experiment - Real-time Visualization', 
+    ax_map.set_ylabel('North (m) →', fontsize=14, color='white', fontweight='bold')
+    ax_map.set_title('', 
                     fontsize=16, color='white', fontweight='bold', pad=20)
     
     # Set fixed axis limits for map
@@ -251,7 +261,23 @@ def animate_docking_experiment(bag_path):
         [-2.0, -1.0], # T3: Stern port (back-right as you specified)
         [-2.0, 1.0]   # T4: Stern starboard (back-left as you specified)
     ]
-    
+
+    # Set up manager state subplot
+    ax_manager.set_facecolor('#1a1a1a')
+    ax_manager.set_title('Manager State', fontsize=12, color='white', fontweight='bold')
+    ax_manager.tick_params(colors='white', labelsize=10)
+    ax_manager.grid(True, alpha=0.3, color='#404040', linestyle='-', linewidth=0.5)
+
+
+    # Extract manager state data
+    manager_state_data = get_manager_state_data(bag_path)
+    manager_state_data['rel_time'] = manager_state_data['Time'] - start_time
+
+    # Process manager state for animation
+    unique_states = manager_state_data['data'].unique()
+    state_to_y = {state: i for i, state in enumerate(unique_states)}
+    manager_state_data['y_value'] = manager_state_data['data'].map(state_to_y)
+
     # Draw static floating dock contour on map
     # Nyhavna floating dock contour (original coordinates)
     CONTOUR1 = [[7035581.26, 7035521.52, 7035521.81, 7035581.6, 7035581.26], 
@@ -279,16 +305,18 @@ def animate_docking_experiment(bag_path):
     drawn_dockable_areas = set()
     track_plots = []
     current_tracks_index = -1
+    manager_state_line = None
+    manager_state_current_point = None
 
 
     thruster_arrows = []
-    thruster_color = '#00ff88'
+    thruster_color = '#ffaa00'
     for i, pos in enumerate(thruster_positions):
-        # Create much larger, more visible arrows
+        # Create thruster arrows
         arrow = ax_vessel.annotate('', xy=(pos[0]+0.8, pos[1]), xytext=(pos[0], pos[1]),
                                 arrowprops=dict(arrowstyle='->', color=thruster_color, 
-                                                lw=8, alpha=0.9, shrinkA=0, shrinkB=0,
-                                                mutation_scale=25))
+                                                lw=4, alpha=0.9, shrinkA=0, shrinkB=0,
+                                                mutation_scale=15))
         thruster_arrows.append(arrow)
         
         # Add thruster label (positioned clearly outside the vessel)
@@ -304,8 +332,9 @@ def animate_docking_experiment(bag_path):
                            fontsize=14, color='#00ff88', fontweight='bold',
                            verticalalignment='top')
     
+    
     def animate(frame):
-        nonlocal vessel_patch, trajectory_line, path_plots, drawn_paths, dock_pose_patch, dock_pose_drawn, dockable_area_plots, drawn_dockable_areas, track_plots, current_tracks_index
+        nonlocal vessel_patch, trajectory_line, path_plots, drawn_paths, dock_pose_patch, dock_pose_drawn, dockable_area_plots, drawn_dockable_areas, track_plots, current_tracks_index, manager_state_line, manager_state_current_point
         
         current_time = times[frame]
         
@@ -333,28 +362,45 @@ def animate_docking_experiment(bag_path):
         # Update time display
         time_text.set_text(f'Time: {current_time:.1f}s')
         
+        # Update manager state
+        manager_state_line, manager_state_current_point = update_manager_state(
+            ax_manager, manager_state_data, current_time, manager_state_line, 
+            manager_state_current_point, unique_states)
+
         return_list = [vessel_patch, time_text] + ([trajectory_line] if trajectory_line else []) + path_plots + dockable_area_plots + track_plots + [arrow for arrow in thruster_arrows]
         if dock_pose_patch:
             return_list.append(dock_pose_patch)
-        
+        if manager_state_line:
+            return_list.append(manager_state_line)
+        if manager_state_current_point:
+            return_list.append(manager_state_current_point)
+
         return return_list
     
     # Create animation
     print(f"Creating animation with {len(pose_data)} frames...")
     print(f"Experiment duration: {times[-1]:.1f} seconds")
     print(f"Found {len(path_lines)} manager path updates")
-    
+
     # Animation timing
     avg_dt = np.mean(np.diff(times)) * 1000  # Convert to milliseconds
-    interval = max(3, min(100, avg_dt)) // 3  # 3x speed for debugging
+    interval = max(10, min(100, avg_dt))  # Real-time playback
     
     anim = FuncAnimation(fig, animate, frames=len(pose_data), 
                         interval=interval, blit=False, repeat=False)
     
     print(f"Animation ready! Playback speed: {1000/interval:.1f} FPS")
     plt.tight_layout()
-    plt.show()
-    
+
+    if save_video:
+        print("Saving animation as MP4...")
+        save_fps = int(1000/interval)  # Match the playback speed
+        anim.save('docking_experiment_animation.mp4', writer='ffmpeg', fps=save_fps, bitrate=1800)
+        print(f"Animation saved as 'docking_experiment_animation.mp4' at {save_fps} FPS")
+        plt.close(fig)  # Close figure to free memory
+    else:
+        plt.show()
+
     return anim
 
 
@@ -534,7 +580,7 @@ def update_vessel_thrusters(ax_vessel, thruster_data, thruster_arrows, thruster_
                     color = '#ff4444'  # Red for reverse thrust
                 else:
                     angle_rad = np.deg2rad(latest_angle + angle_offsets[i])
-                    color = '#00ff88'  # Green for forward thrust
+                    color = '#ffaa00'  # Blue for forward thrust
                 
                 # Calculate arrow end point relative to thruster position
                 pos = thruster_positions[i]
@@ -543,18 +589,57 @@ def update_vessel_thrusters(ax_vessel, thruster_data, thruster_arrows, thruster_
                 
                 # Create new arrow
                 arrow = ax_vessel.annotate('', xy=(end_x, end_y), xytext=(pos[0], pos[1]),
-                                          arrowprops=dict(arrowstyle='->', color=color, 
-                                                        lw=8, alpha=0.9, shrinkA=0, shrinkB=0,
-                                                        mutation_scale=25))
+                                        arrowprops=dict(arrowstyle='->', color=color, 
+                                                        lw=4, alpha=0.9, shrinkA=0, shrinkB=0,
+                                                        mutation_scale=15))
                 thruster_arrows.append(arrow)
             else:
                 # No data yet, create minimal default arrow
                 pos = thruster_positions[i]
                 arrow = ax_vessel.annotate('', xy=(pos[0]+0.3, pos[1]), xytext=(pos[0], pos[1]),
-                                          arrowprops=dict(arrowstyle='->', color='#00ff88', 
-                                                        lw=8, alpha=0.3, shrinkA=0, shrinkB=0,
-                                                        mutation_scale=25))
+                                        arrowprops=dict(arrowstyle='->', color='#ffaa00', 
+                                                        lw=4, alpha=0.3, shrinkA=0, shrinkB=0,
+                                                        mutation_scale=15))
                 thruster_arrows.append(arrow)
+
+
+
+def update_manager_state(ax, manager_data, current_time, state_line, current_point, unique_states):
+    """Update manager state display"""
+    # Remove previous plots
+    if state_line is not None:
+        state_line.remove()
+    if current_point is not None:
+        current_point.remove()
+    
+    # Get data up to current time
+    current_data = manager_data[manager_data['rel_time'] <= current_time]
+    
+    if not current_data.empty:
+        # Plot the state history
+        state_line = ax.step(current_data['rel_time'], current_data['y_value'], 
+                           where='post', linewidth=2, color='#00ff88')[0]
+        
+        # Highlight current state
+        latest_state = current_data.iloc[-1]
+        current_point = ax.scatter(latest_state['rel_time'], latest_state['y_value'], 
+                                 color='#ff4444', s=100, zorder=5)
+        
+        # Set up y-axis labels
+        ax.set_yticks(range(len(unique_states)))
+        ax.set_yticklabels(unique_states)
+        ax.set_ylabel('State', color='white')
+        ax.set_xlabel('Time (s)', color='white')
+        
+        # Auto-adjust x-axis to show some context
+        ax.set_xlim(max(0, current_time - 30), current_time + 5)
+    
+    return state_line, current_point
+
+
+
+
+
 
 def debug_thruster_data(bag_path):
     """Debug function to check actual thruster RPM ranges in the bag file"""
@@ -586,5 +671,5 @@ def debug_thruster_data(bag_path):
 
 if __name__ == "__main__":
     bag_file = "data/exp2_aug_simon_2025-06-06-09-26-37.bag"
-    animate_docking_experiment(bag_file)
+    animate_docking_experiment(bag_file, save_video=True)
     # debug_thruster_data(bag_file)
